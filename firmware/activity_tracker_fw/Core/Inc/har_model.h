@@ -20,8 +20,13 @@
 
 #include "har_model_config.h"
 
-/* 0 — згенерованої мережі в проєкті ще немає; 1 — network.c/.h додані. */
-#define HAR_MODEL_DEPLOYED  0
+/* 0 — мережі в проєкті немає (збирається, інференс вимкнений);
+ * 1 — ваги в har_model_weights.h присутні, інференс увімкнений.
+ * Можна перевизначити при збірці (-DHAR_MODEL_DEPLOYED=0) — цим користуються
+ * хостові тести. */
+#ifndef HAR_MODEL_DEPLOYED
+#define HAR_MODEL_DEPLOYED  1
+#endif
 
 typedef enum {
 	HAR_MODEL_OK           =  0,

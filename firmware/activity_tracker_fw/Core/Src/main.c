@@ -25,6 +25,16 @@
 #include "ism330dhcx_reg.h"
 #include "har_preproc.h"
 #include "har_model.h"
+
+/* Самоперевірка на платі: одноразовий прогін тестових векторів із
+   har_test_vectors.h і вимір часу інференсу лічильником тактів DWT одразу
+   після старту. Вмикати після кожної зміни моделі чи ваг: результат має бути
+   50/50 збігів із очікуваними класами. 0 — звичайна робота. */
+#define HAR_SELFTEST      0
+
+#if HAR_SELFTEST
+#include "har_test_vectors.h"
+#endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -36,7 +46,7 @@
 /* USER CODE BEGIN PD */
 /* Потік CSV у UART: 1 — для збору даних, 0 — коли працює тільки інференс
    (при 104 Гц рядок займає ~60 % пропускної здатності 115200 бод). */
-#define HAR_STREAM_CSV    1
+#define HAR_STREAM_CSV    0
 
 /* Що саме виводити: 1 — відліки після ФНЧ (те, що бачить модель),
    0 — сирі, якщо треба подивитися на сигнал до фільтра. */
@@ -190,6 +200,51 @@ static void emit_pred(uint32_t t_ms, int cls, float p)
 }
 /* USER CODE END PV */
 
+#if HAR_SELFTEST
+/* Прогін тестових векторів і вимір часу інференсу. Викликається один раз
+   після старту; результати йдуть у UART рядками з '#', тож tools/log.py їх
+   пропускає. Лічильник тактів DWT дає точність до одного такту ядра. */
+static void har_selftest(void)
+{
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	DWT->CYCCNT = 0;
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+	int ok = 0;
+	uint32_t cyc_min = 0xFFFFFFFFu, cyc_max = 0, cyc_sum = 0;
+
+	for (int i = 0; i < HAR_TV_COUNT; i++) {
+		float probs[HAR_CLASS_COUNT];
+		int cls = -1;
+
+		const uint32_t t0 = DWT->CYCCNT;
+		const har_model_status_t st = har_model_predict(&har_tv_input[i][0][0], probs, &cls);
+		const uint32_t dt = DWT->CYCCNT - t0;
+
+		if (st != HAR_MODEL_OK) {
+			printf("# selftest vector %d: %s\r\n", i, har_model_status_str(st));
+			continue;
+		}
+		if (dt < cyc_min) { cyc_min = dt; }
+		if (dt > cyc_max) { cyc_max = dt; }
+		cyc_sum += dt;
+		if (cls == (int) har_tv_expected[i]) {
+			ok++;
+		} else {
+			printf("# selftest mismatch %d: expected=%d got=%d\r\n",
+				i, (int) har_tv_expected[i], cls);
+		}
+	}
+
+	printf("# selftest match=%d/%d\r\n", ok, HAR_TV_COUNT);
+	printf("# selftest cycles min=%lu avg=%lu max=%lu clk=%lu\r\n",
+			(unsigned long) cyc_min, (unsigned long) (cyc_sum / HAR_TV_COUNT),
+			(unsigned long) cyc_max, (unsigned long) SystemCoreClock);
+	printf("# selftest us avg=%lu\r\n",
+			(unsigned long) ((uint64_t) (cyc_sum / HAR_TV_COUNT) * 1000000u / SystemCoreClock));
+}
+#endif /* HAR_SELFTEST */
+
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void SystemPower_Config(void);
@@ -269,6 +324,10 @@ int main(void) {
 			HAR_HOP_SAMPLES, (int) HAR_LPF_HZ, HAR_ACC_UNIT, HAR_GYR_UNIT);
 	printf("# model=%s classes=%d\r\n",
 			har_model_status_str(model_st), HAR_CLASS_COUNT);
+
+#if HAR_SELFTEST
+	har_selftest();
+#endif
 
 	/* Unmask the line only once the sensor is configured, so none of the
 	   writes above can leave a stale edge pending. */
